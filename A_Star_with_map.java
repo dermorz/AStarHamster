@@ -1,0 +1,565 @@
+import java.util.*;
+/**
+ * This class extends the Hamster Class with A*-Pathfinding.
+ *
+ * Used was the article "A* Pathfinding for beginners":
+ * http://www.policyalmanac.org/games/aStarTutorial.htm
+ *
+ * @author moritz.pein
+ */
+import de.hamster.debugger.model.Territorium;import de.hamster.debugger.model.Territory;import de.hamster.model.HamsterException;import de.hamster.model.HamsterInitialisierungsException;import de.hamster.model.HamsterNichtInitialisiertException;import de.hamster.model.KachelLeerException;import de.hamster.model.MauerDaException;import de.hamster.model.MaulLeerException;import de.hamster.model.MouthEmptyException;import de.hamster.model.WallInFrontException;import de.hamster.model.TileEmptyException;import de.hamster.debugger.model.Hamster;public class A_Star_with_map implements de.hamster.model.HamsterProgram {class AStarHamster extends Hamster {
+
+	// Nodestate constants
+	private static final int CORN = 1;
+	private static final int FREE = 0;
+	private static final int WALL = -1;
+	private static final int UNKNOWN = -2;
+	
+	// object map
+	private int[][] map;
+	private ArrayList<Node> nodeList = new ArrayList<Node>();
+	
+	// count of columns and rows of the territory
+	private int rows;
+	private int cols;
+	
+	// list of found corns while scanning territory
+	private ArrayList<Integer> cornList = new ArrayList<Integer>();
+
+	// open and closed list used by A*	
+//	ArrayList<Node> openList;
+//	ArrayList<Node> closedList;
+	
+	// Constructor
+	public AStarHamster() {
+		this(0,0,0,0);
+	}
+	
+	// Constructor with parameters
+	public AStarHamster(int reihe, int spalte, int blickrichtung, int anzahlkoerner) {
+		super(reihe, spalte, blickrichtung, anzahlkoerner);
+		// get size of territory
+		this.rows = Territorium.getAnzahlReihen();
+		this.cols = Territorium.getAnzahlSpalten();
+		// initialize the mapper-array
+		map = new int[this.rows][this.cols];
+		// initialize all nodes with state UNKNOWN
+		// (if they are initialized with their actual states,
+		// the initialization takes longer but the A* gets faster)
+		for (int row=0; row < this.rows; row++) {
+			for (int col=0; col < this.cols; col++) {
+				this.initNode(row, col, UNKNOWN, nodeList);
+				if (this.nodeList.get(map[row][col]).getState() == CORN 
+					// the starting position is added to corn-list to optimize the TSP-results
+					|| row==0 && col ==0 ) {
+					this.cornList.add(map[row][col]);
+				}
+			}
+		}
+
+	}
+	
+	// this function initializes one Node
+	private void initNode(int row, int col, int state, ArrayList<Node> list) {
+		if (state == UNKNOWN) {
+		// create a node with coordinates
+			list.add(new Node(row, col));
+		} else {
+		// create a node with coordinates and state
+			list.add(new Node(row, col, state));
+		}
+		// and link it to the mapper
+		// now every Node can be accessed by its coordinates
+		// --> nodeList.get(map[row][col])
+		this.map[row][col] = list.size() - 1;
+	}
+	
+	// this function extends the Movement API by turnTo
+	public void turnTo(int direction) {
+		while (getBlickrichtung() != direction) {
+			this.linksUm();
+		}
+		// thank you captain obvious!
+	}
+	
+	// this function returns the direction
+	// where the passed coordinates are from the Hamsters actual position
+	private int getDirection(int row, int col) {
+		int r = this.getReihe();
+		int c = this.getSpalte();
+		if (row < r)
+			return this.NORD;
+		if (row > r)
+			return this.SUED;
+		if (col < c)
+			return this.WEST;
+		if (col > c)
+			return this.OST;
+			
+		// it is right here!
+		return -1; // errorcode
+	}
+
+	
+	// this function takes an ArrayList, a start Node and goal Node
+	// and creates a distinct Path by pushing the parent-Nodes
+	// of each Node into a stack, beginning with the goal Node until
+	// it reaches the start node.
+	// After that the Stack gets popped empty while moving along the path.
+	// 
+	private void followPath(ArrayList<Node> nodepath,Node start, Node goal) {
+		Stack<Node> path = new Stack<Node>();
+		Node position = goal;
+		// while position is a Node
+		while (position != null) {
+			// push this position, if it's not the start Node 
+			// (start node has no parent)
+			if (position.getParent() != null) {
+ 				path.push(position);
+ 			}
+ 			// let's get the parent's parent...
+ 			position = position.getParent();
+		};
+		
+		// while we haven't popped the whole stack
+		while (!path.empty()) {
+			try {
+				// pop a node and move to it. (step-by-step)
+				Node next = path.pop();
+				this.turnTo(getDirection(next.getX(),next.getY()));
+				this.vor();
+			} catch (EmptyStackException e) {
+				// This should never happen! ...but you never know...
+				break;
+			}
+		}
+		this.resetNodes();
+//		this.schreib("Destination reached."); 
+	}
+	
+	// Again a function to extend the Hamster's movement API
+	// Move to the given coordinates (using A*)
+	public void goTo(int row, int col) {
+		// this is here...
+		Node start = nodeList.get(map[this.getReihe()][this.getSpalte()]);
+		// ...this is there
+		Node goal = nodeList.get(map[row][col]);
+		// calculate the closedList of A*
+		ArrayList<Node> path = astar(start, goal);
+		if (path != null) {
+			// use path to get from start to goal
+			this.followPath(path, start, goal);
+		} else {
+			// if this happens, there is no path. no shortes, no longer... none.
+			this.schreib("No path available!");
+		}
+	}
+	
+	// function to get the orthogonal neighbors of a node
+	// returned in an ArrayList
+	private ArrayList<Node> neighbors(int row, int col) {
+		ArrayList<Node> n = new ArrayList<Node>();
+		// Check for every neighbor, if it's in the Territory
+		if (col - 1 >= 0)
+			n.add(nodeList.get(map[row][col - 1]));
+		if (col + 1 <= this.cols -1)
+			n.add(nodeList.get(map[row][col + 1]));
+		if (row - 1 >= 0)
+			n.add(nodeList.get(map[row - 1][col]));
+		if (row + 1 <= this.rows -1)
+			n.add(nodeList.get(map[row + 1][col]));
+		return n;
+	}
+	
+	// function to determine the "best" next Node to check while processing A*
+	// returns a Node of a given ArrayList
+	private Node findBestNode(ArrayList<Node> list) {
+		Node node = null;
+		// for each Node in given list
+		for (Node n : list) {
+			// if no node was chosen yet, choose the first one
+			if (node == null) {
+				node = n;
+			} else if (n.getH() < node.getH()) {
+			// choose this one, if it has a better heuristic value
+				node = n;
+			}
+		}
+		// debugging: if there is no node, there can't be a best one.
+		if (node == null) System.out.println("no best node");
+		
+		return node;
+	}
+	
+	// function that realizes the actual A*-Algorithm
+	// returns its closedList for a given start end end node.
+	private ArrayList<Node> astar(Node start, Node end) {
+		// fresh open and closed lists
+		ArrayList<Node> openList =  new ArrayList<Node>();
+		ArrayList<Node> closedList = new ArrayList<Node>();		
+		
+		// debugging message
+		//System.out.print("Searching way from "+start.getX()+","+start.getY());
+		//System.out.println(" to "+end.getX()+","+end.getY());
+		
+		
+		openList.add(start);
+		
+		// add every orthogonal neighbor to the open list
+		// and set the startnode as their parent
+		for (Node n : this.neighbors(start.getX(),start.getY())) {
+			if (n.getState() >= 0) {
+				openList.add(n);
+				n.setParent(start);
+			}
+		}
+		// move the start node from the open list to the closed list
+		openList.remove(start);
+		closedList.add(start);
+		
+		// calculate F' = H + G  for every node in the open list		
+		for (Node n : openList) {
+			n.setG(1);
+			n.calcH(end);
+			n.calcF();
+		}
+		
+		// repeat following until the end node is found
+		while (!closedList.contains(end)) {
+			// the next node to examine is the "best" node in the open list
+			// (the node with the best heuristic value)
+			Node next = findBestNode(openList);
+			// no next node? exit here - there is no path
+			if (next == null) {
+				return null;
+			}
+			// move the examined node from open to closed list
+			openList.remove(next);
+			closedList.add(next);
+			// for every orthogonal neighbor
+			for (Node nbor : this.neighbors(next.getX(),next.getY())) {
+				// if the neighbor isn't a wall
+				// and it's not already in the closed list
+				if (nbor.getState() >= 0 && !closedList.contains(nbor)) {
+					// add it to the open list and set its parent
+					if (!openList.contains(nbor)) {
+						openList.add(nbor);
+						nbor.setParent(next);
+					} else {
+					// or if already in the open list,
+					// recalc its F' = H + G if you found a shorter way to it
+						if (next.getG()+1 < nbor.getG()) {
+							// gone way = gone way + 1 more step
+							nbor.setG(next.getG()+1);
+							nbor.calcH(end);
+							nbor.calcF();
+						} 						
+					}
+				}			
+			}
+		}
+		
+		// in our closed list is everything we need to walk down the shortest
+		// path
+		return closedList;
+	}
+
+	// function to reset all nodes in the nodeList. this is necessary because
+	// all previous node-weights are irrelevant on a new calculation	
+	private void resetNodes() {
+		for (Node n : this.nodeList) {
+			n.resetNode();
+		}
+	}
+
+	// function that returns the actual length of a path		
+	private int evaluatePath(ArrayList<Node> nodepath,Node start, Node goal) {
+		int count = 0;
+		Node position = goal;
+		// while position is a Node
+		while (position != null) {
+			// and its parent is a node
+			if (position.getParent() != null) {
+				// walk this way up and count the steps
+ 				count++;
+ 				position = position.getParent();
+ 			} else {
+ 				break;
+ 			}
+		};
+		this.resetNodes();
+		return count;
+	}
+	
+	// extends the hamsters api with a function to collect all reachable corns in
+	// a territory.
+	public void collectCorns() {
+		// standing on corns? eat it!
+		this.eat();
+		// this is where the magic begins ;)
+		// a 2-d matrix is created where all path-values from each corn to every
+		// other corn is presented. this matrix will be used for the heuristic
+		// to determine an optimized path through the maze (TSP)
+		int count = cornList.size();
+		int[][] cornPaths = new int[count][count];
+		for (int i = 0; i < count; i++) {
+			// i only calculate half of the matrix because its mirrored over the
+			// diagonal axis: the way i->j is as long as the way j->i, because
+			// it's the same way just in the opposite direction
+			for (int j = i; j < count; j++) {
+				if (i == j) {
+					// this is the diagonal axis of the matrix, representing the
+					// path values from a node to itself. it's set to "infinity"
+					// because this should not be a valid path
+					cornPaths[i][j] = Integer.MAX_VALUE;
+				} else {
+					// one cell in the matrix (m[j,j]) is filled with the "length"
+					// of the path between corn i and corn j. 
+					Node from = nodeList.get(cornList.get(i));
+					Node to = nodeList.get(cornList.get(j));
+					ArrayList<Node> path = this.astar(from, to);
+					cornPaths[i][j] = this.evaluatePath( path, from, to);
+					// *mirror*
+					cornPaths[j][i] = cornPaths[i][j];
+				}
+			}
+		}
+		
+		// now create a path to visit all corns using the TSP algorithm =
+		// the shortest path that passes all corns
+		ArrayList<Integer> tsp_path = new ArrayList<Integer>() ;
+		tsp_path = tsp(cornPaths, 0, tsp_path);
+		int from = 0;
+		int to = 0;
+		// ...and walk down this path eating all corns on the way
+		for (int i = 1; i < tsp_path.size(); i++) {
+			to = cornList.get(tsp_path.get(i));
+			this.goTo(nodeList.get(to).getX(),nodeList.get(to).getY());
+			this.eat();
+			from = to;
+		}
+		to = 0;
+		// walk home (0,0)...
+		this.goTo(nodeList.get(to).getX(),nodeList.get(to).getY());
+		// and tell how many corns were eaten
+		this.schreib(""+this.getAnzahlKoerner());
+		
+	}
+	
+	// extends the hamster API with a function that eats all corns that
+	// might exist on the current position
+	private void eat() {
+		while (this.kornDa()) {
+			this.nimm();
+		}	
+	}
+	
+	// the actual "Traveling Salesman Problem"-Algorithm (recursive)
+	// http://en.wikipedia.org/wiki/Travelling_salesman_problem
+	// parameters:
+	//  - cornPaths:	a matrix of path-values for the heuristic
+	//  - here:			row number of the matrix where to find the shortest partial 
+	//					path
+	//  - visited:		a list of already visited positions
+	// return value:
+	//  - visited:		an ordered (kind of optimized) list of all position to visit
+	public ArrayList<Integer> tsp(int[][] cornPaths,int here, 
+									ArrayList<Integer> visited) {
+        // add this row value to visited positions
+        visited.add(here);
+        
+        // copy that row
+        int[] temp = cornPaths[here];
+        // and set the path-value to "infinitive" for all already visited 
+        // positions
+        for (int x : visited) {
+            if (temp[x] != Integer.MAX_VALUE) {
+                temp[x] = Integer.MAX_VALUE;
+            }
+        }
+        // find the shortest path in the actual row
+        int shortest = Integer.MAX_VALUE;
+        int shortest_index = here;
+        for (int i = 0; i < temp.length; i++) {
+            if (temp[i] < shortest) {
+                shortest = temp[i];
+                shortest_index = i;
+            }
+        }
+        // if the shortest path-value is not "infinitive", it hasn't been 
+        // visited yet
+        if (shortest != Integer.MAX_VALUE) {
+        	// so look for the next partal path to choose
+            tsp(cornPaths, shortest_index, visited);
+        } else {
+        	// if not, all spots have been visited - return the path
+            return visited;
+        }
+		
+        return visited;
+    }
+	
+	
+}
+
+/**
+ * This class implemets a Node. It is one partition of the given territory.
+ *
+ * @author moritz.pein
+ */
+
+class Node {
+
+	// coordinates of the Node in the territory
+	private int x;
+	private int y;
+	
+	// parent of this node (used in pathfinding)
+	private Node parent;
+	
+	// costs to get to this node
+	private int g;
+	// heuristic quess, how much it will cost to reach the destination
+	private int h;
+	// F = H + G 
+	private int f;
+	
+	// what is on this node?
+	// -2 unknown
+	// -1 wall
+	// 0 nothing
+	// 1 corn
+	int state;
+
+
+	// standard constructor
+	public Node() {
+	
+	}
+	
+	// constructor with parameters
+	public Node(int row, int col) {
+		this.x = row;
+		this.y = col;
+		this.state = -2;
+		int dummy = this.getState();
+	}
+	
+	
+	// constructor with parameters
+	public Node(int row, int col, int state) {
+		this.x = row;
+		this.y = col;
+		this.state = state;
+	}
+	
+	// setter
+	public void setX(int row) {
+		this.x = row;
+	}
+
+	// getter
+	public int getX() {
+		return this.x;
+	}
+
+	// setter
+	public void setY(int col) {
+		this.y = col;
+	}
+
+	// getter
+	public int getY() {
+		return this.y;
+	}
+	
+	// lazy getter for node-state
+	public int getState() {
+		// lazy state resolution: get state from territory only if needed
+		// but then remember it
+		if (this.state == -2) {
+			if (Territorium.mauerDa(this.getX(),this.getY())) {
+				this.setState(-1);
+			} else if (Territorium.getAnzahlKoerner(this.getX(),this.getY()) > 0) {
+				this.setState(1);
+			} else {
+				this.setState(0);
+			}
+		}
+		return this.state;
+	}
+	
+	// setter for node-state
+	public void setState(int state) {
+		this.state = state;
+	}
+	
+	// setter and getter for node's parent
+	public void setParent(Node parent) {
+		this.parent = parent;
+	}
+
+	// getter		
+	public Node getParent() {
+		return this.parent;
+	}
+	
+	// setter
+	public void setG(int g) {
+		this.g = g;
+	}	
+	
+	// getter
+	public int getG() {
+		return this.g;
+	}
+	
+	// getter
+	public int getH() {
+		return this.h;
+	}
+	
+	// setter
+	public void setH(int destination) {
+		this.h = destination;
+	}
+
+	
+	// function to heuristicly estimate the way to go
+	public void calcH(Node destination) {
+		this.h = Math.abs(this.x - destination.getY()) + 
+					Math.abs(this.y - destination.getY());
+	}
+
+	// function to calc F' = H' + G' (A* stuffs)	
+	public void calcF() {
+		this.f = this.h + this.g;
+	}
+	
+	// getter
+	public int getF() {
+		return this.f;
+	}
+	
+	// reset this node - forget previous calculations
+	public void resetNode(){
+		this.parent = null;
+		this.g = 0;
+		this.h = 0;
+		this.f = 0;
+	}
+	
+	// for debugging
+	public String toString() {
+		return this.x +","+ this.y;
+	}
+	
+}
+
+public void main() {
+	// initiate a AStarHamster at (0,0)
+	AStarHamster a = new AStarHamster(0, 0, 1, 0);
+	// send it to collect all reachable corns on the territory
+	a.collectCorns();
+}
+}
